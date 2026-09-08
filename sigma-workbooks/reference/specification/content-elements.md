@@ -49,15 +49,39 @@ Common pattern — bold + color (both supported):
 # **<span style="color: #8B0000">Deployments Dashboard</span>**
 ```
 
+### Pipe tables don't render — use a list instead
+
+**Markdown pipe tables (`| a | b |`) do not render inside a `text` element.** Verified live: the table collapses into one run-on paragraph with the literal `|` characters intact — no grid, no borders, no columns. When a `text` element needs to present tabular information (a small register, a legend, a status key), use a bulleted or numbered list instead; it renders correctly where a pipe table does not.
+
+### `description` fields are plain text, not Markdown — unlike `body`
+
+`body` (above) is Markdown. A **different** field — an element or column's `description` (the small caption/sub-line shown under KPIs, table columns, etc.) — is **plain text with no Markdown parsing at all.** The same escape sequence behaves differently in each: a `\_` that correctly protects a literal underscore inside a Markdown `body` renders as a **literal backslash followed by the underscore** (`product\_group`) inside a `description`, because there's no parser there to consume the escape. Don't carry Markdown-escaping habits over into `description` text — write it as plain prose.
+
+### Nested `<span>`s flatten on round-trip — emit them as siblings
+
+Rich text built from **nested** `<span>` tags — e.g. a colored span nested inside another span, used to vary status color word-by-word within one line — loses the inner styling on the server round-trip. Verified live: every nested span's color flattened to the outer span's color (or to white) on readback, even though the initial POST accepted the markup and looked correct pre-save. Emitting the spans as **siblings** at the same nesting level, rather than nesting one inside another, survives readback with each span's own color intact.
+
+### A Markdown image tag doesn't render an image
+
+`![alt](url)` inside a `text` element's `body` validates, pushes, and survives readback — but renders as a literal `!` character followed by a plain link, not an image. **Sigma's Markdown dialect has no image support.** Use the `image` element below instead of trying to embed one inside a `text` block.
+
 ## image
 
-Embeds an external image by URL (hosted only — no uploads). Required `id`, `kind`, `url`; `url` supports `{{formula}}` references for dynamic selection. `alt`, `link`, and a `style` block exist too — pull the shape from the recipe. Sizing comes from the layout grid, not the element.
+**Embeds a pre-uploaded asset by its storage key — not a hosted external URL.** `source: {kind: upload, key: "<asset-key>"}` is the only shape that renders. `{kind: image, url: "https://..."}` — a hosted external image URL — is **rejected outright** as `Invalid kind: "image"`, confirmed both with a plain `https` URL and with a data URI, so it's the element shape that's wrong, not the scheme. (An earlier version of this doc claimed the opposite — "hosted only, no uploads" — which is backwards; correct as of the 2026-09-04 live verification below.)
+
+**There is no upload API.** An image has to be uploaded once through the Sigma UI — drop an image element onto a page and upload it there — and the resulting asset `key` copied out of a `GET` readback of that workbook, then referenced from the spec from then on:
 
 ```yaml
 id: logo
 kind: image
-url: https://cdn.example.com/logo.png
+source:
+  kind: upload
+  key: "<asset-key-copied-from-a-ui-uploaded-images-readback>"
 ```
+
+**A full-replacement `PUT` drops any element the generating script doesn't emit — including a UI-uploaded image.** This skill's standard iterate-via-regenerate workflow (`reference/workflows/crud.md`) will silently delete the logo on the next push unless the build script carries the `image` element (with its captured `key`) forward every time. If a logo or other uploaded asset disappears after a regenerate, this is why — re-add the element with the previously-captured key, it does not need to be re-uploaded.
+
+`alt`, `link`, and a `style` block exist too — pull the shape from the recipe. Sizing comes from the layout grid, not the element.
 
 ## divider
 
@@ -160,17 +184,15 @@ options:
     destination: { type: link, url: https://example.com }
 ```
 
-**Auto** (`mode: auto`) has no other required fields; optional `pageLabels` — a **list** of `{ pageId, label }` overrides (not a map keyed by page id). Duplicate `pageId`s are rejected.
+**Auto** (`mode: auto`) has no other required fields; optional `pageLabels` — per-page label overrides keyed by page id.
 
 ```yaml
 id: page-nav-auto
 kind: navigation
 mode: auto
 pageLabels:
-  - pageId: page-1
-    label: Overview
-  - pageId: page-2
-    label: Details
+  page-1: Overview
+  page-2: Details
 ```
 
 **Live-verified 2026-08-03** (real create + readback + screenshot): both variants round-tripped verbatim. Visually, `navigation` renders as a horizontal **tab bar** (underlined label per option, not a sidebar or breadcrumb — expect tabs if you pictured otherwise from the name). `manual` mode showed exactly the `options[].label` strings as tabs, in the given order. `auto` mode showed one tab per workbook page, using `pageLabels` to override the tab text where provided — and, confirmed by adding two more pages after the fact and re-screenshotting, a page with **no** `pageLabels` entry falls back to that page's own `name` as its tab text, and once there are more pages than fit the element's width, the overflow collapses into a trailing **"More ▾"** dropdown rather than wrapping or truncating.

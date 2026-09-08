@@ -108,6 +108,8 @@ Each entry has `name`, `type`, `description`, and `visibility`. Use the `name` v
 
 Public docs: <https://help.sigmacomputing.com/reference/listconnectiontablecolumns>.
 
+> **This endpoint truncates at 50 columns, and no pagination parameter works around it.** `page`, `pageToken`, `offset`, and `nextPageToken` were all tried against a real 50+-column table and every one either errored or was silently ignored — the response just stops at 50 entries with nothing indicating more columns exist. For any table that plausibly has more than 50 real columns, cross-check the returned count against `INFORMATION_SCHEMA.COLUMNS` (via a warehouse MCP, SQL client, or asking the user) before concluding the table only has as many columns as this endpoint returned. A formula that references a column past the 50th will fail as "unknown column" for a reason that has nothing to do with the formula itself — the column was never in the list you built from.
+
 If the call fails (rare — connector quirks, permissions), fall back to asking the user for column names or having them run `DESCRIBE TABLE` / `INFORMATION_SCHEMA.COLUMNS` against the warehouse.
 
 For a warehouse-table source with path `["SALES_DB", "PUBLIC", "ORDERS"]`, the formula for a column is `[ORDERS/order_id]` (last path segment + column name).

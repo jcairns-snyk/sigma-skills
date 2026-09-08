@@ -31,8 +31,13 @@ value:
 - `value.columnId` — REQUIRED. The column ID to show in the card.
 - `format` on the column controls the displayed format. See `formatting.md`.
 - **Hiding the title (avoid the duplicate-title trap):** a KPI derives its visible title from the element `name` **and, when that is absent, from the bound value column's `name`.** So *omitting the element `name` is not enough* — the value column's name still renders as a title. This is the #1 KPI mistake: pairing a colored Markdown category label above the KPI (see `styling.md` KPI-card recipe) with a KPI whose value column has a real name like `Net Revenue` → you get **two** stacked titles ("NET REVENUE" label + "Net Revenue" title + the number). To show only the label + number, set the **value column's** `name: ' '` (a single space). `name: ''` (empty) or omitting it gets stripped and the title re-derives — only a single space persists. (If you instead want the KPI's own title and no separate label, skip the Markdown label and give the value column a real `name`.)
+- **`name.text` (and column `name`) render as literal text, not HTML or Markdown.** An HTML entity like `&mdash;` renders as the five literal characters `&mdash;`, not an em dash — there is no entity decoding. Use the actual Unicode character (`—`) in the string instead of an entity reference.
 
 For a period-over-period delta (e.g. "vs. prior quarter"), compute it as a **formula column** — `[This Quarter] / [Last Quarter] - 1` against the source — and show it in its own column or a second KPI.
+
+## Ratio and aggregate formulas must inline both aggregates
+
+**A ratio or other multi-aggregate KPI formula must compute every aggregate it needs inside one formula — it cannot reference a sibling aggregate column by name.** `formula: '[gross_adds] / [total_arr]'`, where `gross_adds` and `total_arr` are two other aggregate columns on the same element, **compiles clean, saves clean, and evaluates to `NULL`** at query time — no error, no warning. The fix is to inline both aggregates in one expression: `formula: 'Sum([Amount Won]) / Sum([Amount Total])'`. This also applies to any formula built from several aggregates over the same grain (a trailing-N-period ratio, a cohort-restricted rate, an attrition rate over two windows) — every aggregate the ratio needs has to be computed inline, in the one formula, even if that means repeating a filter predicate two or three times within it. That repetition is a real Sigma constraint on ratio KPIs specifically, not a sign the formula is wrong — see `sigma-data-models`'s `metrics.md` for pushing the shared predicate into a reusable calculated column so the repetition happens once, upstream, instead of being retyped per KPI.
 
 ## Value styling
 

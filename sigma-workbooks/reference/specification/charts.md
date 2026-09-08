@@ -45,7 +45,7 @@ yAxis:
 - `xAxis` — single `{ columnId, sort?, format? }`
 - `yAxis` — single `{ columnIds: [<colId>, ...], format? }`. On any cartesian chart, a `columnIds` entry may be an object `{ columnId, type }` (`type`: `bar` | `line` | `area` | `scatter`) to set that series' shape — most useful on `combo-chart`
 - `xAxis.sort` shape: `{ by: <colId>, direction: ascending | descending }`
-- Optional `format` on each axis configures title, labels, marks, and scale — it's inlined on `xAxis.format` / `yAxis.format`; inspect it via the kind recipe above rather than transcribing the whole object
+- Optional `format` on each axis configures title, labels, marks, and scale — it's inlined on `xAxis.format` / `yAxis.format`; inspect it via the kind recipe above rather than transcribing the whole object. See "Y-axis scale and gridlines" below for two keys that need a companion to take effect.
 
 ## Bar chart (revenue by category)
 
@@ -162,22 +162,20 @@ columns:
       kind: number
       formatString: "$,.0f"
 value:
-  columnId: col-sales
+  id: col-sales
 color:
-  columnId: col-family
+  id: col-family
   sort:
     by: col-sales
     direction: descending
 ```
 
-`holeValue` is optional. When set, it references one of the donut's columns by ID — that column's aggregated value drives the hole label/render — not a literal number. **It must be a different column than `value.columnId`** — a column can only sit on one channel at a time, and the API rejects the collision with a 400 (`Column 'X' is referenced from both 'value' and 'holeValue'`). For a center label that shows the same metric, add a second column with the same formula:
+`holeValue` is optional. When set, it references one of the donut's columns by ID — that column's aggregated value drives the hole label/render — not a literal number. **It must be a different column than `value.id`** — a column can only sit on one channel at a time, and the API rejects the collision with a 400 (`Column 'X' is referenced from both 'value' and 'holeValue'`). For a center label that shows the same metric, add a second column with the same formula:
 
 ```yaml
 holeValue:
-  columnId: col-sales-hole    # distinct column, e.g. formula: Sum([Master/Sales Amount])
+  id: col-sales-hole    # distinct column, e.g. formula: Sum([Master/Sales Amount])
 ```
-
-Donut/pie channel pointers use **`columnId`, not `id`**. `{ id: col-sales }` is a 400 (`Invalid kind: "donut-chart"` / `"pie-chart"`).
 
 Related donut-only fields (all round-trip): `innerRadius` (hole size as a ratio of the outer radius, default 0.6) and `hole.value` styling (`fontWeight`, `color`, `visibility`) for the center label.
 
@@ -243,6 +241,8 @@ dataLabel:
   totals: { display: shown }
 ```
 
+> **`dataLabel.anchor: "outside-end"` silently removes the chart's point markers.** Verified live: positioning labels outside the line/point with this anchor also drops the visible markers at each data point, with no warning in the response. If markers need to stay visible alongside outside-anchored labels, this combination doesn't support it — pick a different anchor or accept the marker loss as a deliberate trade.
+
 For `combo-chart`, optional `seriesDataLabel` is a map keyed by layer shape (`bar`, `line`, `area`, `scatter`) with per-shape overrides:
 
 ```yaml
@@ -270,22 +270,41 @@ yAxis2:                         # subset of yAxis.columnIds that renders on the 
     visibility: shown           # set to `hidden` to hide the axis (no other fields on that branch)
 ```
 
-Per-series styling:
+Per-series styling is keyed by layer shape (`bar` / `line` / `area` / `scatter`):
 
-- `seriesLineAreaStyle` — **list** of `{ columnId, style }` for line/area layers (not a map keyed by column id). Duplicate `columnId`s are rejected.
+- `seriesLineAreaStyle` — stroke/fill, curve, and area opacity for line/area layers
 - `seriesPointStyle` — marker shape/size for points
 - `seriesDataLabel` — per-shape data-label overrides (above)
 
-```yaml
-seriesLineAreaStyle:
-  - columnId: col-margin-pct
-    style:
-      interpolation: monotone
-```
-
 Chart-wide fallbacks `barStyle`, `lineAreaStyle`, `pointStyle`, and `gap` also exist. Inspect the kind recipe for the full sub-field set of any of these.
 
-### More cartesian options
+### `lineAreaStyle.missing` — an all-null series draws a phantom zero line by default
+
+When two series share one axis but are mutually exclusive row-by-row (e.g. a `unit = 'currency'` measure and a `unit = 'rate'` measure emitted from the same spine, each `NULL` wherever the other has data), `lineAreaStyle.missing` **defaults to `"zero"`** — the inactive series is plotted as a flat line pinned to zero instead of not being drawn, producing a visible second line (or a stripe through the real one) where the reader expects a single clean series. This is invisible in a clean CSV export of the underlying data — the data is correct; only the rendering is wrong.
+
+```yaml
+lineAreaStyle:
+  missing: hide   # zero (default) | hide | interpolate
+```
+
+Set `missing: "hide"` to suppress the null series entirely. `missing: "interpolate"` is the other option, but it needs **at least two real data points** to draw anything — an all-null series still draws nothing under `interpolate` — so `hide` is the right choice specifically when a series can be entirely absent in a given view.
+
+### Y-axis scale and gridlines — some keys need a companion to take effect
+
+`yAxis.format.scale.zero: false` (meant to let the axis start somewhere other than zero, e.g. so a $300–340M series isn't flattened against a forced $0 baseline) **persists through round-trip but has no visible effect on its own.** Verified live: the value survives POST and GET intact while the rendered chart keeps the forced zero baseline. It only takes effect together with **both** `hideZeroLine: true` **and** an explicit `scale.type` — omit either companion and the setting is a silent no-op:
+
+```yaml
+yAxis:
+  format:
+    scale: { zero: false, type: linear }
+    hideZeroLine: true
+```
+
+The general lesson generalizes beyond this one field: **a spec key that round-trips clean but visibly does nothing may be missing a required companion key, not be unsupported.** Validate/push/readback proves the key was accepted; only a render proves it worked. Don't conclude "inert" from a round-trip test alone.
+
+`yAxis.format.marks` (gridlines) only accepts two enum values: `"none"` or `"grid"` — there is no intermediate gridline density or style option.
+
+## More cartesian options
 
 Each of these is a top-level key on cartesian charts; one-liner here, full sub-fields via the kind recipe at the top of this file.
 
@@ -348,7 +367,7 @@ The correct shape binds the scatter to a **grouping**: source a table element th
   xAxis: { columnId: s-mpct }       # x = a measure (Margin %)
   yAxis: { columnIds: [s-rev] }     # y = a measure (Revenue)
   color: { by: category, column: s-rep }   # point identity — one mark per rep
-  size:  { columnId: s-qty }        # optional bubble size; pointers use `columnId`, not `id`
+  size:  { id: s-qty }              # optional bubble size; note `size.id`, NOT size.columnId
 ```
 
 `color` always takes the `{ by: single|category|scale, column, ... }` form (see "Bar chart with custom category colors") — a bare `{ id }` / `{ columnId }` is rejected. **Validate a scatter by querying it for >1 distinct x**, not by POST status alone.
@@ -378,7 +397,7 @@ With a 3-member `Region` (Region A / Region B / Region C), this renders one bar 
 - `rowsBy` alone → **vertical** small multiples (panels stacked in rows).
 - `columnsBy` alone → **horizontal** small multiples (panels side by side).
 - **both**, pointing at **two different** columns → a **2-D grid** (rows × columns).
-- The facet reference key is **`columnId`** (a `columns[]` id on the element). Pivot-table `rowsBy`/`columnsBy` cross-tab shelves use the same `columnId` key — they are a different *mechanism* (shelves, not small-multiples), not a different pointer field.
+- The facet reference key is **`columnId`** (a `columns[]` id on the element). This is a different mechanism from the `pivot-table`'s own `rowsBy`/`columnsBy` cross-tab shelves, which key on `id`.
 
 ### Supported chart kinds (emit `trellis` for these only)
 
@@ -403,7 +422,7 @@ The empirical coverage matrix (how each kind was verified live, POST + readback 
 
 - **`pie-chart` → `donut-chart`.** Pie and donut are both circular (`value` + `color`), but only donut trellises. If the intent is a faceted pie, emit a `donut-chart` with the same `trellis`.
 - **`kpi-chart` → N sibling KPIs.** There is no native KPI trellis. For "one KPI per category," lay out N separate `kpi-chart` elements, one filtered to each member.
-- **`pivot-table` → its own shelves.** The pivot's element-level `rowsBy`/`columnsBy` cross-tab shelves (keyed on `columnId`) already are the native faceting — do not add a separate `trellis` key.
+- **`pivot-table` → its own shelves.** The pivot's element-level `rowsBy`/`columnsBy` cross-tab shelves (keyed on `id`) already are the native faceting — do not add a separate `trellis` key.
 - **`table` → keep flat** or add the facet as an extra grouping/row dimension.
 
 ### ⚠️ Silent-stripping caveat — ALWAYS re-read and verify
@@ -457,10 +476,10 @@ was confirmed against a real org via `POST /v2/workbooks/spec/verify`, and
 
 | kind | required beyond `id`/`kind`/`source`/`columns` | shape |
 |---|---|---|
-| `treemap-chart` | `category` | `category: {columnId: <dim col>}` |
-| `gauge-chart`   | `value`    | `value: {columnId: <measure col>}` |
-| `sankey-chart`  | `stages`, `value` | `stages: [{columnId: <dim col>}]`, `value: {columnId: <measure col>}` |
-| `funnel-chart`  | `stage`, `series` | `stage: {columnId: <dim col>}`, `series: {columnId: <measure col>}` |
+| `treemap-chart` | `category` | `category: {id: <dim col>}` |
+| `gauge-chart`   | `value`    | `value: {id: <measure col>}` |
+| `sankey-chart`  | `stages`, `value` | `stages: [{id: <dim col>}]`, `value: {id: <measure col>}` |
+| `funnel-chart`  | `stage`, `series` | `stage: {id: <dim col>}`, `series: {id: <measure col>}` |
 | `box-chart`     | `yAxis`    | `yAxis: {columnIds: [<measure col>]}` |
 
 ```yaml
@@ -471,7 +490,7 @@ was confirmed against a real org via `POST /v2/workbooks/spec/verify`, and
   columns:
     - { id: cDim, formula: '[Master/Category]' }
     - { id: cMea, formula: 'Sum([Master/Revenue])' }
-  category: { columnId: cDim }  # the ONLY pointer treemap accepts (`id` is a 400)
+  category: { id: cDim }        # the ONLY pointer treemap accepts
 ```
 
 ### Three traps, all found by probing rather than reading
@@ -487,7 +506,7 @@ Assert the readback, not the status code.
 mislabeled UNION failure: `bar-chart`, unambiguously valid, returns the identical
 error the moment any sibling property has the wrong type. Four kinds read as
 "unsupported" purely because the probe sent `value: "cA"` where the schema wants
-`value: {columnId: "cA"}`. To test whether a kind exists, satisfy its required
+`value: {id: "cA"}`. To test whether a kind exists, satisfy its required
 properties first, then A/B against a known-good kind with the SAME body shape.
 
 **3. The OpenAPI under-documents these kinds.** `treemap-chart`'s union member

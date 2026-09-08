@@ -72,6 +72,8 @@ curl -s -H "Authorization: Bearer $SIGMA_API_TOKEN" \
 
 Returns `name`, `type`, and `visibility`. Normalize special characters per the **Special characters** section in `reference/columns.md`.
 
+> This endpoint truncates at 50 columns with no working pagination parameter — see the same note in the `sigma-workbooks` skill's `reference/workflows/discover.md`. For a table that plausibly has more than 50 real columns, cross-check the returned count against `INFORMATION_SCHEMA.COLUMNS` rather than assuming the response is complete.
+
 **Existing data-model elements / columns** (only when the user explicitly names an existing model as a relationship target or template):
 
 ```sh
@@ -140,6 +142,8 @@ After the JSON, surface a "What you need to supply" table:
 Reminder on IDs: anything you submit is remapped on accept (see the ID semantics table at the top). Cross-references (e.g., `dateColumnId` in metric timelines, relationship keys) are resolved correctly before remapping.
 
 ### 4. Submit
+
+> **The create endpoint is `POST /v2/dataModels/spec`, not `POST /v2/dataModels`.** The latter 404s — there is no create verb on the bare `/v2/dataModels` path. This is an easy mistake by analogy with `GET /v2/dataModels` (the list endpoint just above, in the GET section below), which *is* valid without a suffix — the list and create endpoints on this resource don't mirror each other the way GET/POST usually do on the same path.
 
 ```sh
 cat > spec.json <<'EOF'

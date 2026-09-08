@@ -63,6 +63,8 @@ Each `<Page id>` matches a `document.pages[].id`, `document.overlays[].id`, or
 
 Use `<Container>` for any tag with nested children — a `<Element>` only renders as a leaf.
 
+**A `<Container>` cannot nest inside a `<Panel>`.** Doing so 400s with an error that doesn't name the real problem — something like `Layout parent not found in getLayoutParentByLayoutIdOrFail`, which reads like a broken element reference rather than a structural restriction. It's the same restriction `<Tab>` has (below): a `<Panel>` accepts bare `<Element>` children only. If a panel/sidebar needs several elements grouped with a shared visual treatment (e.g. a common background behind a row of counters), give each element its own `style.backgroundColor` rather than wrapping them in a `<Container>`.
+
 ## Container elements
 
 A `kind: "container"` entry in `document.elements[]` is a grouping placeholder
@@ -207,6 +209,7 @@ Two `<Tab>`s, two elements (`overview-chart`, `detail-table`) each declared once
 in `document.elements[]`; `<Tab>` order ties them to the labels above.
 
 - **Gotcha (verified):** inside a `<Tab>`, use **bare `<Element>` children only** — never nest a `<Container>` inside a `<Tab>`. A `<Tab>` is already a mini-grid (its own `gridTemplateColumns` / `gridTemplateRows`), so elements position directly in it; a nested `<Container>` scrambles tab render order.
+- **Position binding is easy to break silently.** Because `<Tab>` carries no `name` attribute, reordering the `<Tab>` blocks in the layout XML without also reordering the corresponding content — or reordering the `tabs[]` labels without reordering the `<Tab>` blocks — silently swaps which content renders under which label. Nothing validates that "Evo" content actually ends up under an "Evo" tab; a rotated-order smoke test (swap two tabs, re-render, confirm the content moved with the label) is the only way to catch a mismatch before shipping. This is the same failure class `controls.md`'s "one control, one source of truth" pattern exists to prevent — a label and its content are two things that can drift unless something ties them together structurally.
 - **When to use it:** several views that are alternates of each other (a summary + a detail table, one view per region/segment) rather than sequential reading — pack them into one region instead of a long scroll or extra pages.
 - **Building it:** hand-authoring the position-mapped `<Tab>` block is error-prone. Use `Composition.tabbed_container(id:, tabs:, grid_column:, grid_row:, tab_bar_alignment: 'start')` in `scripts/lib/composition.rb` — `tabs:` is `[{name:, inner:}]`, where `inner` is the tab's bare-`<Element>` XML (built with `Composition.band`/`Composition.le` or by hand). It returns `{element:, layout:}`, ready to add to `document.elements[]` and `document.layout`.
 
@@ -253,6 +256,7 @@ A table element's `gridRow` span controls how many data rows are visible before 
 - **Summary / aggregated tables** (a handful of grouped rows): size to roughly the row count + header, ~6–10 grid rows.
 - **KPIs**: short — ~5–6 rows; they're a single number.
 - **Charts**: ~8–12 rows so axes and labels aren't crushed.
+- **Compact register/status rows** (many short rows, e.g. a per-metric attestation table): if the numerals in a row look sliced off in a render, the row is too short even though nothing about the spec, POST, or readback flags it — see `tables.md`'s row-height note. Grow the row rather than trusting the format string.
 
 Heights are relative grid units (tracks are `auto`), so these are rules of thumb, not pixels — but the asymmetry holds: **tables are the element most often made too short.** If you're unsure, render the page (PNG export) and count visible rows.
 
@@ -397,5 +401,13 @@ occupies a grid region and can carry curated destinations. Use
 `settings.navigation` + `document.panels` for built-in header/sidebar chrome;
 use a `navigation` element when the menu needs to live inside the page grid
 alongside other content.
+
+## Overlays (modals and drawers)
+
+`document.overlays[]` is the sibling structure for **modals and drawers** — content that opens on demand instead of living in the always-visible page or panel chrome above. It follows the **same three-piece pattern as panels**: a metadata entry in `document.overlays[]`, a layout block (an overlay's content is placed the same way a page's is — inside a block whose `id` matches the overlay's `id`), and something that opens it — typically a `button` element's `on-click: {effect: open-overlay, overlayId: <id>}` action (see `reference/workflows/actions.md`).
+
+**Sending the layout block without a matching `document.overlays[]` entry validates and pushes clean but is silently dropped on render** — the same failure mode documented for panels above. Content that lives only inside a mis-registered overlay disappears entirely with no error; if a modal's content is missing after a push, check that the overlay metadata and the layout block both exist and share the same `id` before suspecting the content itself.
+
+**A button that's meant to open an overlay needs its `on-click` action authored explicitly — it isn't inherited from pulling a working modal.** Reading back a live workbook that has a working modal preserves the modal's own `on-close: {effect: close-overlay}` intact, but the *button* that opens that modal does not automatically carry a populated `actions` array in the same readback — copying the modal forward without separately authoring the button's `open-overlay` action ships a button that renders and visibly does nothing when clicked. `open-overlay`'s `overlayId` refers to `document.overlays[].id`, not an element id — a common point of confusion since both are just strings in the spec.
 
 To study real grid-container idioms, fetch an existing multi-page workbook's spec (`GET /v2/workbooks/{id}/spec`, see SKILL.md Steps 1–2). The OpenAPI doesn't model the `layout` XML string, so a live spec is the way to see production layout.

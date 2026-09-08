@@ -72,6 +72,16 @@ filters:                 # the TARGETS it filters — one entry per element+colu
 
 > **A control cannot bind to a map element** (`point-map` / `region-map` / `geography-map`). Pointing a list control's `source` (value list) or a `filters[]` target at a map element fails the POST with `Dependency not found: '<mapElementId>'` (live-verified 2026-06-26). Back the control with a real `table` element (e.g. a small dimension/directory table on the same column) for both the value list and the filter target. To also scope the map, filter it indirectly (e.g. drive the map's source element off the same filtered table, or apply the predicate in the data model) rather than targeting the map element directly.
 
+> **Single-select default is a scalar, not the array shape above.** With `selectionMode: single`, a `values: ["<label>"]` array default validates and pushes clean but comes back on readback as `value: null` — no default actually took, and a chart reading "whichever option is selected" sums or draws every option instead of the intended one. Verified on a live build 2026-09-04. Set the default through a scalar `value: "<label>"` field for single-select, and confirm on a GET readback that it survives — don't assume the array form works just because it validates.
+
+## Value-list ordering (`list` / `segmented`)
+
+**A data-bound `list` or `segmented` control's option order is always alphabetical by label, decided by Sigma's own `DISTINCT` query — nothing about the source element changes it.** Verified by testing three independent levers against a live workbook (2026-09-04): the source table's own `sort` field (ascending by a tab-position column) — ignored; the same table sorted descending by label — ignored; a `sort` object added directly to the control's `source` — ignored. None affect the rendered option order.
+
+The only working lever is the label **string** itself. To force a specific order, pad each label with leading spaces proportional to its desired position (`"  Total ARR"` sorts before `"Gross ARR Adds"`) — most renderers collapse leading whitespace visually, so the padded pills read exactly like the unpadded ones. A visible numeric prefix (`"1. Total ARR"`) also works but states the order twice if it's already visible elsewhere (e.g. tile order directly above the control). Whichever column carries the padded string has to exist on every element the control filters, and any title that echoes the selected value back (e.g. `{{[Metric]}}`) needs a `Trim()` around it — Markdown treats four or more leading spaces at the start of a line as an indented code block, so an untrimmed title silently renders in a grey monospace box instead of plain text.
+
+**A `segmented` control also gives every option equal width, sized to the longest label.** With several options sharing one control, labels beyond roughly 25 characters truncate with an ellipsis — shorten labels (drop parentheticals/acronyms) rather than relying on the control to wrap or resize them.
+
 ## Legend
 
 `controlType: legend` is a released control variant in the live workbook
@@ -157,6 +167,8 @@ value: 30
 ```
 
 `op`: `now-minus` or `now-plus`.
+
+> **Prefer a relative mode over `between` with fixed ISO dates whenever the control needs to keep working unattended.** A `between` control with a hardcoded `endDate` is only correct until that date passes — whatever it bounds (a trend chart's x-axis, a table) silently stops advancing the day the window closes, with no error and no visual sign beyond the chart quietly going stale. `last`, `current`, and `custom` with relative `{op: now-minus, ...}` bounds all recompute on every open. This has bitten a control that was the *only* thing bounding a chart's axis — the axis looked populated for weeks after the window closed.
 
 ### Mode Examples
 
@@ -436,6 +448,10 @@ The dual pattern, and a common Sigma layout: a parent table that several control
 ```
 
 Multiple controls on the same target compose with **AND** — selecting region "West" + date "Q1" narrows to the intersection. Prefer this over binding each control to every downstream element; it's less repetitive and keeps the filter chain in one place.
+
+## Design pattern: keep a picker's option list and its branch formula in one source
+
+A recurring shape: a control's value list and a downstream formula's branches are keyed off the same set of strings — e.g. a `Metric` picker driving a chart column's `If(Coalesce([Metric], "Default") = "A", ..., [Metric] = "B", ..., ...)` chain. **Generate both the option list and the branch tests from one shared list in the authoring code — never hand-write them as two separate parallel literals**, even if the option list is itself DRY (e.g. built from a Python constant). Two independently-typed copies of the same string set will drift the moment one is edited and not the other, and the failure is silent: `Coalesce`'s fallback branch swallows the mismatch, so the chart renders the *default* series under whatever label the control shows — no error, no null, nothing that validate/push/readback would catch. If you're generating specs programmatically, loop over one list to emit both the option source and the branch tests. If authoring by hand, keep the pair adjacent in the same file and diff them on every change.
 
 ## Tip: `controlId` vs `id`
 

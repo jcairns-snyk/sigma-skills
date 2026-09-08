@@ -40,6 +40,10 @@ For the `table` kind, `name` is a plain string. The styled title-section object 
 
 Array of column IDs controlling left-to-right display order. Defaults to declaration order.
 
+### Column-level `visibility`
+
+A column-level `visibility: hidden` field is **silently dropped** — it doesn't hide the column, and nothing in the response complains about it. If a column needs to exist for downstream formulas but shouldn't be shown to users, control visibility at the **element** level instead: leave it off `order`, or don't add it to a pivot's `columnsBy`/`rowsBy`/`values`. (This is a different field from an `input-table` column's own `hidden` flag, covered in the Input tables section below — that one is a working mechanism scoped to that element kind, don't conflate the two.)
+
 ### `groupings`
 
 Pivot / aggregation views without changing element kind:
@@ -53,6 +57,8 @@ groupings:
 ```
 
 > **A `table` with no `groupings` shows raw DETAIL rows.** This is the #1 migration bug for aggregated source vizzes: a Tableau worksheet with a dimension on Rows + `SUM(...)` is an *aggregated* query, so its Sigma `table` MUST carry a `groupings` entry. Without it the table renders every warehouse row (e.g. "9,676,896 rows"), the dimension repeats, and `Sum(If(...))` columns read `$0` per row. If a "summary" table renders the base row count, it's missing `groupings`. (Charts don't need this — they aggregate by their axis/`value` binding; only `table` does.)
+>
+> **A table with only pre-aggregated metric columns and NO `groupings` at all evaluates row-wise, not as a total.** E.g. a "total ARR" / "active accounts" summary table sourced straight from a metrics element, with no `groupBy`/`calculations` block, can read a single underlying row's value instead of the aggregate — it compiles clean and looks plausible until you check it against the real total. Verify any single-row summary table through a `groupings` block (even a trivial one with no `groupBy`, all columns in `calculations`) or bind the same metric through a `kpi-chart`, which aggregates by construction — don't assume a bare `table` of "already aggregate" columns aggregates on its own.
 >
 > **`calculations` columns must be AGGREGATE expressions** (`Sum([Amt])`, `CountDistinct([Id])`, …). A conditional aggregate is a **row-level** column `If(cond, [val], 0)` wrapped in `Sum(...)` at the grouping — i.e. `Sum([Cur Amt])` where `Cur Amt = If(flag = "Cur", [Tcv], 0)`. Do **not** put a *passthrough of an already-aggregated* column in `calculations`; it re-aggregates to **"multiple values"** in every group cell. (Verified 2026-06-15.)
 >
@@ -157,6 +163,8 @@ filters:
     endDate: "2026-03-31"
 ```
 
+> **An unbound `date-range` element filter silently defaults to a huge window, not to "no filter."** Omitting `startDate`/`endDate` on `mode: between` doesn't turn the filter off — without a **control** actually setting the range, the effective bounds can default to something on the order of year 2020–2100. On a table this is invisible; feeding the same unbounded filter into a chart's x-axis blows the axis out to that full span, which looks like a bug in the chart when the real cause is the unbound filter underneath it. If a `date-range` filter isn't meant to be driven by a control, give it explicit bounds — or a relative `last`/`current`/`custom` mode — rather than leaving `between` open.
+
 #### `text-match`
 
 ```yaml
@@ -234,6 +242,10 @@ tableStyle:
 
 All fields are optional; omit `preset` for the spreadsheet default. Pull the full enum set via the `kind`-form recipe at the top.
 
+> **Table cells clip overflowing text by default.** To wrap a long text column instead of clipping it, set `textWrap: "wrap"` on `tableStyle.textStyles.cell` at the **element level** — a workbook-wide `settings.theme.overrides` block with the same key does not reach an individual element's cells the way the element-level setting does. If a column (e.g. a long "basis"/description string) is visibly cut off with no ellipsis or wrap, check whether `textWrap` was set on the theme instead of on the element.
+>
+> **Give compact rows enough height, or the numerals visually clip.** A dense register/status-style table with very short rows can render its numeric values with the bottoms sliced off while the labels directly above them look fine. This defect is invisible to spec validation, a successful POST, and even a `GET` readback — it only shows up in an actual rendered export or screenshot. If numbers in a compact table look chopped off in a render, grow the row height (`cellSpacing`, or the element's `gridRow` span in the layout) rather than assuming the number format is wrong.
+
 ### `columnSecurities`
 
 Column-level security on a table element uses the same `columnSecurities` criteria shapes as a data-model table element — see `sigma-data-models/reference/column-level-security.md`. Confirmed byte-identical against the live OpenAPI schema (2026-08-03), and confirmed live create + readback round-trips exactly. This field is only present on `table`, not `pivot-table` or `input-table`.
@@ -268,14 +280,14 @@ columns:
       formatString: ",.0f"
 values: [piv-count]
 rowsBy:
-  - columnId: piv-cloud
+  - id: piv-cloud
 columnsBy:
-  - columnId: piv-env
+  - id: piv-env
     sort:
       direction: descending
 ```
 
-`values` (required) is the measure column array — the cells of the pivot. `rowsBy` and `columnsBy` place dimension columns explicitly on the row and column shelves; each item is `{ columnId, sort? }`, where `sort` is `{ direction: ascending | descending, by?, aggregation? }` (`by` can be a column ID or `"row-count"`). **Do not use `{ id }` on these shelves** — that shape is a 400 (`Invalid kind: "pivot-table"`). Columns not listed on either shelf still render as available dimensions.
+`values` (required) is the measure column array — the cells of the pivot. `rowsBy` and `columnsBy` place dimension columns explicitly on the row and column shelves; each item is `{ id, sort? }`, where `sort` is `{ direction: ascending | descending, by?, aggregation? }` (`by` can be a column ID or `"row-count"`). Columns not listed on either shelf still render as available dimensions.
 
 ## `conditionalFormats` — threshold coloring on cells
 
@@ -300,6 +312,8 @@ conditionalFormats:
 ```
 
 Condition operators include `=`, `!=`, `>`, `>=`, `<`, `<=`, `IsNull`, `IsNotNull`, `Contains`, `NotContains`, `StartsWith`, `EndsWith`, `Between`, `NotBetween`, and `formula` (arbitrary boolean). Style block supports `backgroundColor`, `color`, `bold`, `italic`, `underline`, and column-level `format` override.
+
+> **This is a `{type, columnIds, condition}` shape, not a row-formula shape** — a `conditionalFormats` entry that tries to express the rule as a boolean formula string keyed by row (rather than `type`/`condition`/`value` as above) fails with the misleading, unrelated-looking error `Invalid kind: "input-table"` regardless of which element kind it's actually on. If you hit that error and the element genuinely is an `input-table` (or `table`/`pivot-table`), suspect `conditionalFormats`' shape first, not the element `kind`.
 
 GET may stringify `value` (`"0"`). Later PUTs sometimes want a number `0`
 and sometimes the string — re-type from the 400 rather than echoing
@@ -337,7 +351,7 @@ writeback app needs this manual step per input table before handoff.
 
 - **System column** — `{ id }` where `id` ∈ `ID`, `CREATED_AT`, `CREATED_BY`, `UPDATED_AT`, `UPDATED_BY`. Protocol-managed; type is fixed.
 - **Key column** — `{ id, key }` binding to a source column on `source.from` (linked tables; `key` is immutable once created).
-- **Editable data column** — `{ id, type }` where `type` ∈ `text`, `number`, `datetime`, `checkbox`, `multi-select`, `file`.
+- **Editable data column** — `{ id, type }` where `type` ∈ `text`, `number`, `datetime`, `checkbox`, `multi-select`, `file`. **`type` is immutable once created, the same as a key column's `key`** — changing an existing column's `type` (e.g. `text` → `number`) is rejected outright. Add a new column (and, if it's a key column, a new element id) rather than trying to convert one in place.
 - **Formula column** — `{ id, formula }` for a computed column.
 
 **Column validation (2026-06-18 release; all verified round-tripping):**
